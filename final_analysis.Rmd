@@ -1,0 +1,2707 @@
+---
+title: "Untitled"
+author: "JOKHROF AHMED DOHA"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+#1
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+#2
+```{r}
+rm(list = ls())
+graphics.off()
+```
+
+#----------------------------#
+# 3. LOAD PACKAGES
+#----------------------------#
+
+```{r}
+library(haven)      # read .sav / .dta
+library(dplyr)      # data manipulation
+library(tidyr)      # data reshaping
+library(cluster)    # clustering algorithms
+library(factoextra) # clustering visuals + gap statistic
+library(e1071)      # fuzzy C-means
+library(aricode)    # ARI + NMI
+library(pheatmap)   # heatmaps
+library(fmsb)       # radar charts
+library(ggplot2)    # plots
+```
+
+
+# ================================
+# 4.DISTRICT CODE → DISTRICT NAME LOOKUP
+# ================================
+
+```{r}
+
+district_lookup <- data.frame(
+  HH7A = c(
+    1,3,4,6,9,10,12,13,15,18,19,22,26,27,29,30,
+    32,33,35,36,38,39,41,42,44,46,47,48,49,50,
+    51,52,54,55,56,57,58,59,61,64,65,67,68,69,
+    70,72,73,75,76,77,78,79,81,82,84,85,86,87,
+    88,89,90,91,93,94
+  ),
+  district_name = c(
+    "Bagerhat","Bandarban","Barguna","Barishal","Bhola","Bogura",
+    "Brahmanbaria","Chandpur","Chattogram","Chuadanga","Cumilla",
+    "Cox's Bazar","Dhaka","Dinajpur","Faridpur","Feni",
+    "Gaibandha","Gazipur","Gopalganj","Habiganj","Joypurhat",
+    "Jamalpur","Jashore","Jhalokati","Jhenaidah","Khagrachari",
+    "Khulna","Kishoreganj","Kurigram","Kushtia","Lakshmipur",
+    "Lalmonirhat","Madaripur","Magura","Manikganj","Meherpur",
+    "Moulvibazar","Munshiganj","Mymensingh","Naogaon","Narail",
+    "Narayanganj","Narsingdi","Natore","Chapainawabganj",
+    "Netrokona","Nilphamari","Noakhali","Pabna","Panchagarh",
+    "Patuakhali","Pirojpur","Rajshahi","Rajbari","Rangamati",
+    "Rangpur","Shariatpur","Satkhira","Sirajganj","Sherpur",
+    "Sunamganj","Sylhet","Tangail","Thakurgaon"
+  )
+)
+
+```
+
+#5
+```{r}
+hh <- read_sav("hh.sav")
+hl <- read_sav("hl.sav")
+wm <- read_sav("wm.sav")
+ch <- read_sav("ch.sav")
+fs <- read_sav("fs.sav")  # if available
+
+```
+
+# 6.Creating Unique Household ID
+```{r}
+hh <- hh %>% mutate(hh_id = paste(HH1, HH2, sep = "_"))
+hl <- hl %>% mutate(hh_id = paste(HH1, HH2, sep = "_"))
+wm <- wm %>% mutate(hh_id = paste(HH1, HH2, sep = "_"))
+ch <- ch %>% mutate(hh_id = paste(HH1, HH2, sep = "_"))
+fs <- fs %>% mutate(hh_id = paste(HH1, HH2, sep = "_"))
+```
+
+
+# --- 7. HOUSEHOLD SIZE FROM HL ----------------------------------------------
+```{r}
+hh_size_df <- hl %>%
+  group_by(hh_id) %>%
+  summarise(
+    hh_size = n(),            
+    .groups = "drop"
+  )
+```
+
+# --- 8. MERGE HH WITH HOUSEHOLD SIZE ----------------------------------------
+```{r}
+hh <- hh %>%
+  left_join(hh_size_df, by = "hh_id")
+```
+
+# --- 9. RECODING WASH & ENVIRONMENTAL VARIABLES -----------------------------
+
+```{r}
+table(hh$WS1, useNA="ifany")
+table(hh$WS11, useNA="ifany")
+table(hh$HW1, useNA="ifany")
+table(hh$HW2, useNA="ifany")
+table(hh$HW3, useNA="ifany")
+table(hh$HC4, useNA="ifany")
+table(hh$HC6, useNA="ifany")
+```
+#----------------------------#
+# 10. RECODE WASH INDICATORS 
+#----------------------------#
+
+```{r}
+hh <- hh %>%
+  mutate(
+
+    # ================================
+    # IMPROVED WATER (WS1) 
+    # ================================
+    improved_water = case_when(
+      # IMPROVED SOURCES
+      WS1 %in% c(11,12,13,14,21,31,41,51,91,92) ~ 1,
+
+      # UNIMPROVED SOURCES
+      WS1 %in% c(32,42,61,71,72,81,96) ~ 0,
+
+      # NO RESPONSE
+      WS1 == 99 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # =====================================
+    # MPROVED SANITATION (WS11) 
+    # =====================================
+    improved_san = case_when(
+      # IMPROVED SANITATION
+      WS11 %in% c(11,12,13,14,18,21,22) ~ 1,
+
+      # UNIMPROVED SANITATION
+      WS11 %in% c(23,31,41,51,95,96) ~ 0,
+
+      # NO RESPONSE
+      WS11 == 99 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # ===========================================
+    # HANDWASHING COMPONENTS (HW2 & HW3)
+    # ===========================================
+    # HW2: WATER IS AVAILABLE (1 = Yes, 2 = No, 9 = No response)
+    hw_water = case_when(
+      HW2 == 1 ~ 1,
+      HW2 == 2 ~ 0,
+      HW2 == 9 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # HW3: SOAP IS PRESENT (1 = Yes, 2 = No, 9 = No response)
+    hw_soap = case_when(
+      HW3 == 1 ~ 1,
+      HW3 == 2 ~ 0,
+      HW3 == 9 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # BASIC HANDWASHING FACILITY (WATER + SOAP)
+    handwashing_basic = case_when(
+      hw_water == 1 & hw_soap == 1 ~ 1,
+      hw_water == 1 & hw_soap == 0 ~ 0,
+      hw_water == 0               ~ 0,
+      TRUE ~ NA_real_
+    ),
+
+    # =====================================
+    # CLEAN FLOOR (HC4) 
+    # =====================================
+    clean_floor = case_when(
+      #IMPROVED FLOOR MATERIALS
+      HC4 %in% c(31,32,33,34,35) ~ 1,     # parquet, vinyl, tiles, cement, carpet
+
+      #NIMPROVED FLOOR MATERIALS
+      HC4 %in% c(11,12,21,22,96) ~ 0,     # earth, dung, wood, bamboo, other
+
+      #NO RESPONSE
+      HC4 == 99 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # =====================================
+    # CLEAN WALL (HC6) 
+    # =====================================
+    clean_wall = case_when(
+      #IMPROVED WALL MATERIALS
+      HC6 %in% c(31,32,33,34,35) ~ 1,     # cement, stone+cement, bricks, blocks, covered adobe
+
+      #UNIMPROVED WALL MATERIALS
+      HC6 %in% c(11,12,13,14,21,22,23,24,25,26,27,36,96) ~ 0,
+
+      #NO RESPONSE
+      HC6 == 99 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # =====================================
+    # CROWDING (HC3 + hh_size)
+    # =====================================
+    HC3_num = as.numeric(HC3),
+    crowding = ifelse(HC3_num > 0, hh_size / HC3_num, NA_real_),
+
+    # =====================================
+    # HOUSEHOLD SURVEY WEIGHT
+    # =====================================
+    w_hh = as.numeric(hhweight)
+  )
+
+```
+
+#----------------------------#
+# 11. RECODE WOMEN'S HYGIENE (wm.dta)
+#----------------------------#
+
+```{r}
+wm <- wm %>%
+  mutate(
+    private_wash = case_when(
+      UN17 == 1 ~ 1,                  # YES
+      UN17 == 2 ~ 0,                  # NO
+      UN17 %in% c(8, 9) ~ NA_real_,   # DK / NO RESPONSE
+      TRUE ~ NA_real_
+    ),
+    w_wm = as.numeric(wmweight)
+  )
+
+wm_district <- wm %>%
+  group_by(HH7A) %>%
+  summarise(
+    private_wash_pct = 100 *
+      sum(private_wash * w_wm, na.rm = TRUE) /
+      sum(w_wm[!is.na(private_wash)], na.rm = TRUE),
+    .groups = "drop"
+  )
+
+```
+
+#----------------------------#
+# 12. CHILD DIARRHOEA (ch.dta)
+#----------------------------#
+
+```{r}
+ch <- ch %>%
+  mutate(
+    diarrhea = case_when(
+      CA1 == 1 ~ 1,                  # YES
+      CA1 == 2 ~ 0,                  # NO
+      CA1 %in% c(8, 9) ~ NA_real_,   # DK / NO RESPONSE
+      TRUE ~ NA_real_
+    ),
+    w_ch = as.numeric(chweight)
+  )
+
+ch_district <- ch %>%
+  group_by(HH7A) %>%
+  summarise(
+    child_diarrhea_pct = 100 *
+      sum(diarrhea * w_ch, na.rm = TRUE) /
+      sum(w_ch[!is.na(diarrhea)], na.rm = TRUE),
+    .groups = "drop"
+  )
+
+```
+
+
+#-------------------------------------------#
+# 13.CLEAN ROOM VARIABLES FOR CROWDING
+#-------------------------------------------#
+
+```{r}
+# =====================================
+# ROOMS USED FOR SLEEPING (HC3)
+# =====================================
+hh$HC3_num <- as.numeric(hh$HC3)
+hh$HC3_num[hh$HC3_num %in% c(98, 99)] <- NA
+
+# =====================================
+# HOUSEHOLD SIZE
+# =====================================
+hh$hh_size[hh$hh_size %in% c(98, 99)] <- NA
+
+# =====================================
+# CROWDING = PERSONS PER SLEEPING ROOM
+# =====================================
+hh$crowding <- hh$hh_size / hh$HC3_num
+
+# =====================================
+# REMOVE INFINITE and INVALID VALUES
+# =====================================
+hh$crowding[!is.finite(hh$crowding)] <- NA
+```
+
+
+
+
+#----------------------------#
+# 14. DISTRICT AGGREGATION FOR HH VARIABLES
+#----------------------------#
+
+```{r}
+wmean <- function(x, w) {
+  if(all(is.na(x)) || all(is.na(w))) return(NA_real_)
+  sum(x * w, na.rm = TRUE) / sum(w[!is.na(x)], na.rm = TRUE)
+}
+
+hh_district <- hh %>%
+  group_by(HH7A) %>%
+  summarise(
+    improved_water_pct     = 100 * wmean(improved_water, w_hh),
+    improved_san_pct       = 100 * wmean(improved_san, w_hh),
+    handwashing_basic_pct  = 100 * wmean(handwashing_basic, w_hh),
+    clean_floor_pct        = 100 * wmean(clean_floor, w_hh),
+    clean_wall_pct         = 100 * wmean(clean_wall, w_hh),
+    crowding_mean          = wmean(crowding, w_hh),
+    .groups = "drop"
+  )
+```
+
+
+#----------------------------#
+# 15. MERGE ALL DISTRICT TABLES
+#----------------------------#
+
+
+```{r}
+district <- hh_district %>%
+  left_join(wm_district, by = "HH7A") %>%
+  left_join(ch_district, by = "HH7A") %>%
+  left_join(district_lookup, by = "HH7A") %>%   #ADD THIS
+  rename(district_code = HH7A)
+```
+
+#----------------------------#
+# 16. PREPARE MATRIX FOR CLUSTERING
+#----------------------------#
+
+```{r}
+wash_mat <- district %>% 
+  dplyr::select(
+    improved_water_pct,
+    improved_san_pct,
+    handwashing_basic_pct,
+    clean_floor_pct,
+    clean_wall_pct,
+    private_wash_pct,
+    child_diarrhea_pct,
+    crowding_mean
+  )
+
+# Replace NA using median (more robust than mean)
+wash_scaled <- wash_mat %>%
+  mutate(across(everything(), ~ replace(., is.na(.), median(., na.rm = TRUE)))) %>%
+  scale()
+
+```
+
+#17.  --- OUTLIER DIAGNOSTICS (ROBUST & SAFE) ---
+
+```{r}
+# Use the value already inside 'district' to avoid row-mismatch risk
+district$clean_floor_pct_raw <- district$clean_floor_pct
+
+# District with the maximum clean floor percentage
+district[which.max(district$clean_floor_pct_raw), ]
+
+# Summary statistics for outlier inspection
+summary(district$clean_floor_pct_raw)
+
+```
+
+
+# ============================================================
+# 18. FINAL CLEAN GAP STATISTIC CODE (K-MEANS + FUZZY C-MEANS)
+# ============================================================
+
+```{r}
+library(cluster)
+library(e1071)
+library(ggplot2)
+library(dplyr)
+
+set.seed(42)
+
+# -----------------------------------------
+# ENSURE MATRIX and NO NA/INF
+# -----------------------------------------
+wash_scaled <- as.matrix(wash_scaled)
+stopifnot(all(is.finite(wash_scaled)))
+
+K.max <- 10
+B <- 50   # Bootstrap replications (stable + fast)
+
+# ============================================================
+#  GAP STATISTIC FOR K-MEANS
+# ============================================================
+
+gap_km <- clusGap(
+  wash_scaled,
+  FUN = kmeans,
+  nstart = 25,
+  K.max = K.max,
+  B = B
+)
+
+gap_km_df <- as.data.frame(gap_km$Tab)
+gap_km_df$k <- 1:nrow(gap_km_df)
+gap_km_df$method <- "K-means"
+
+# ============================================================
+# GAP STATISTIC FOR FUZZY C-MEANS 
+# ============================================================
+
+fuzzy_gap_values <- rep(NA, K.max)
+fuzzy_se_values  <- rep(NA, K.max)
+
+# IMPORTANT: Start from k = 2 (k = 1 breaks fuzzy)
+for (k in 2:K.max) {
+  
+  # ---- Real Data ----
+  fcm_real <- try(cmeans(wash_scaled, centers = k, m = 2), silent = TRUE)
+  if (inherits(fcm_real, "try-error")) next
+  Wk_real <- fcm_real$withinerror
+  
+  # ---- Reference Data ----
+  Wk_ref <- numeric(B)
+  
+  for (b in 1:B) {
+    ref_data <- apply(wash_scaled, 2, function(x)
+      runif(nrow(wash_scaled), min(x), max(x)))
+    
+    fcm_ref <- try(cmeans(ref_data, centers = k, m = 2), silent = TRUE)
+    
+    if (!inherits(fcm_ref, "try-error")) {
+      Wk_ref[b] <- fcm_ref$withinerror
+    } else {
+      Wk_ref[b] <- NA
+    }
+  }
+  
+  Wk_ref <- Wk_ref[!is.na(Wk_ref)]
+  
+  if (length(Wk_ref) > 5) {
+    fuzzy_gap_values[k] <- mean(log(Wk_ref)) - log(Wk_real)
+    fuzzy_se_values[k]  <- sd(log(Wk_ref)) * sqrt(1 + 1/length(Wk_ref))
+  }
+}
+
+gap_fcm_df <- data.frame(
+  k = 1:K.max,
+  gap = fuzzy_gap_values,
+  SE.sim = fuzzy_se_values,
+  method = "Fuzzy C-means"
+)
+
+# ============================================================
+#  COMBINE BOTH METHODS
+# ============================================================
+
+gap_km_plot <- data.frame(
+  k = gap_km_df$k,
+  gap = gap_km_df$gap,
+  SE.sim = gap_km_df$SE.sim,
+  method = "K-means"
+)
+
+gap_all <- rbind(gap_km_plot, gap_fcm_df)
+
+# ============================================================
+#  REMOVE NA ROWS
+# ============================================================
+
+gap_all_clean <- gap_all %>% filter(!is.na(gap))
+
+# ============================================================
+#  FINAL GAP STATISTIC PLOT 
+# ============================================================
+
+p_gap <- ggplot(gap_all_clean, aes(x = k, y = gap, color = method)) +
+  geom_line(linewidth = 1.2) +      # modern ggplot syntax
+  geom_point(size = 2) +
+  geom_errorbar(
+    aes(ymin = gap - SE.sim, ymax = gap + SE.sim),
+    width = 0.15
+  ) +
+  geom_vline(xintercept = 2, linetype = "dashed") +  #  optimal k = 2
+  scale_x_continuous(breaks = 2:K.max) +
+  labs(
+    title = "Gap Statistic for Optimal Number of WASH Vulnerability Clusters",
+    x = "Number of Clusters (k)",
+    y = "Gap(k)",
+    color = "Method"
+  ) +
+  theme_minimal(base_size = 14)
+
+print(p_gap)
+
+
+ggsave(
+  "Figure_3_Gap_Statistic_WASH_Kmeans_Fuzzy_FINAL.png",
+  plot = p_gap,
+  width = 9,
+  height = 7,
+  dpi = 600
+)
+```
+## 19. Table X: Gap Statistics and Standard Errors for WASH Indicators
+
+```{r}
+# -------------------------------
+# Combine K-means and Fuzzy Gap
+# -------------------------------
+gap_table <- gap_all_clean %>%
+  arrange(method, k) %>%
+  select(
+    Method = method,
+    k,
+    Gap_k = gap,
+    SE_k = SE.sim
+  )
+
+# -------------------------------
+# Show in RMD
+# -------------------------------
+knitr::kable(
+  gap_table,
+  digits = 4,
+  caption = "Gap statistics and associated standard errors for WASH indicators using K-means and Fuzzy C-means"
+)
+
+# -------------------------------
+# Save as CSV for thesis archive
+# -------------------------------
+write.csv(
+  gap_table,
+  "Table_Gap_Statistic_WASH.csv",
+  row.names = FALSE
+)
+
+```
+
+
+#============================#
+# 20. FIND OPTIMAL k (NbClust)
+#============================#
+
+```{r}
+library(NbClust)
+set.seed(42)
+
+nb <- NbClust(
+  wash_scaled,
+  distance = "euclidean",
+  min.nc = 2,
+  max.nc = 10,
+  method = "kmeans",
+  index = "all"
+)
+
+best_k <- as.integer(
+  names(
+    sort(table(nb$Best.nc[1, ]), decreasing = TRUE)[1]
+  )
+)
+
+best_k
+
+```
+
+#----------------------------------
+# 21. HIERARCHICAL CLUSTERING
+#----------------------------------
+
+```{r}
+# Distance matrix
+dist_mat <- dist(wash_scaled)
+
+# Ward’s hierarchical clustering
+hc <- hclust(dist_mat, method = "ward.D2")
+
+# Cut using optimal k from NbClust
+hc_cut <- cutree(hc, k = best_k)
+
+# Attach cluster labels
+district$cluster_hc <- factor(hc_cut)
+
+# ---- CLEAN DENDROGRAM PLOT ----
+par(mar = c(5, 4, 4, 2))   # better margins
+
+plot(
+  hc,
+  labels = district$district_name,  # USE NAMES instead of numeric IDs
+  cex = 0.6,                         # shrink label size
+  hang = -1,                        # align labels at same level
+  main = "Hierarchical Clustering of Districts (Ward.D2)",
+  xlab = "",
+  sub  = "",
+  ylab = "Height"
+)
+
+rect.hclust(hc, k = best_k, border = c("red", "darkgreen"))
+
+```
+
+
+
+
+
+#----------------------------#
+# 22. K-MEANS CLUSTERING
+#----------------------------#
+
+```{r}
+
+library(factoextra)   # for fviz_cluster
+
+# Reproducibility
+set.seed(42)
+
+# Run K-means with optimal k from NbClust (best_k = 2)
+km <- kmeans(wash_scaled, centers = best_k, nstart = 25)
+
+# Attach K-means cluster labels to district data
+district$cluster_km <- factor(km$cluster)
+
+# ---- CLEAN CLUSTER VISUALIZATION ----
+fviz_cluster(
+  km,
+  data = wash_scaled,
+  geom = "point",
+  main = "K-means Clusters of Districts (WASH Indicators)",
+  repel = TRUE
+) +
+  theme_minimal(base_size = 14)
+```
+
+#----------------------------#
+# 23. FUZZY C-MEANS CLUSTERING
+#----------------------------#
+
+```{r}
+library(e1071)   # cmeans()
+
+set.seed(42)
+
+# Run FCM (k = best_k, fuzziness m = 2)
+fcm <- cmeans(wash_scaled, centers = best_k, m = 2)
+
+# Membership matrix (n x k)
+U <- fcm$membership
+
+# Hard (crisp) cluster assignment from max membership
+district$cluster_fcm <- factor(apply(U, 1, which.max))
+
+# Maximum membership per district (certainty)
+district$max_membership <- apply(U, 1, max)
+
+# Membership gap for k=2 (uncertainty measure)
+# (for k=2, gap = |u1 - u2|; smaller gap => more transitional)
+district$membership_gap <- abs(U[, 1] - U[, 2])
+
+# Transitional districts rule (choose delta; 0.05 is strict, 0.10 moderate)
+delta <- 0.05
+district$transition_flag <- as.integer(district$membership_gap < delta)
+
+# Quick check
+cat("FCM clusters:\n")
+print(table(district$cluster_fcm))
+cat("\nTransitional districts (delta =", delta, "):", sum(district$transition_flag), "out of", nrow(district), "\n")
+
+```
+
+
+
+
+# ================================
+# 24. URBAN–RURAL DISTRICT AGGREGATION (FINAL FIXED)
+# ================================
+
+
+```{r}
+# 1. Create Urban/Rural indicator
+hh <- hh %>%
+  mutate(res_ur = factor(HH6, levels = c(1,2), labels = c("Urban","Rural")))
+
+# 2. Aggregate district × Urban/Rural
+district_ur <- hh %>%
+  filter(!is.na(res_ur)) %>%
+  group_by(HH7A, res_ur) %>%
+  summarise(
+    improved_water_pct       = 100 * wmean(improved_water, w_hh),
+    improved_san_pct         = 100 * wmean(improved_san, w_hh),
+    handwashing_basic_pct    = 100 * wmean(handwashing_basic, w_hh),
+    clean_floor_pct          = 100 * wmean(clean_floor, w_hh),
+    clean_wall_pct           = 100 * wmean(clean_wall, w_hh),
+    crowding_mean            =        wmean(crowding, w_hh),
+    .groups = "drop"
+  ) %>%
+  left_join(district_lookup, by = "HH7A") %>%
+  rename(district_code = HH7A)
+
+#View(district_ur)
+
+
+```
+
+# ============================================================
+# 25. URBAN vs RURAL FUZZY C-MEANS (MAIN ANALYSIS)
+# ============================================================
+
+
+```{r}
+# 1. Split Urban and Rural datasets
+urban_df <- district_ur %>% filter(res_ur == "Urban")
+rural_df <- district_ur %>% filter(res_ur == "Rural")
+
+# 2. Select clustering variables (same as national)
+wash_vars <- c(
+  "improved_water_pct",
+  "improved_san_pct",
+  "handwashing_basic_pct",
+  "clean_floor_pct",
+  "clean_wall_pct",
+  "crowding_mean"
+)
+
+urban_mat <- scale(urban_df[, wash_vars])
+rural_mat <- scale(rural_df[, wash_vars])
+
+# 3. Run FCM for Urban and Rural
+set.seed(42)
+fcm_urban <- e1071::cmeans(urban_mat, centers = best_k, m = 2)
+fcm_rural <- e1071::cmeans(rural_mat, centers = best_k, m = 2)
+
+# 4. Add dominant cluster to datasets
+urban_df$cluster_fcm_urban <- apply(fcm_urban$membership, 1, which.max)
+rural_df$cluster_fcm_rural <- apply(fcm_rural$membership, 1, which.max)
+
+# 5. Quick cluster size check
+table(urban_df$cluster_fcm_urban)
+table(rural_df$cluster_fcm_rural)
+
+# 6. Preview results
+#View(urban_df[, c("district_name", "cluster_fcm_urban")])
+#View(rural_df[, c("district_name", "cluster_fcm_rural")])
+
+
+urban_df$district_name[urban_df$cluster_fcm_urban == 1]
+urban_df$district_name[urban_df$cluster_fcm_urban == 2]
+
+rural_df$district_name[rural_df$cluster_fcm_rural == 1]
+rural_df$district_name[rural_df$cluster_fcm_rural == 2]
+```
+
+#----------------------------#
+# 26.--- Urban–Rural K-means ---
+#----------------------------#
+```{r}
+set.seed(42)
+km_urban <- kmeans(urban_mat, centers = best_k, nstart = 50)
+km_rural <- kmeans(rural_mat, centers = best_k, nstart = 50)
+
+urban_df$cluster_km_urban <- km_urban$cluster
+rural_df$cluster_km_rural <- km_rural$cluster
+```
+
+#----------------------------#
+# 27.--- Urban–Rural Hierarchical (Ward.D2) ---
+#----------------------------#
+
+```{r}
+dist_urban <- dist(urban_mat)
+dist_rural <- dist(rural_mat)
+
+hc_urban <- hclust(dist_urban, method = "ward.D2")
+hc_rural <- hclust(dist_rural, method = "ward.D2")
+
+urban_df$cluster_hc_urban <- cutree(hc_urban, k = best_k)
+rural_df$cluster_hc_rural <- cutree(hc_rural, k = best_k)
+
+```
+
+
+#----------------------------#
+# 28. COMPARISON OF METHODS (ARI & NMI)
+#----------------------------#
+
+```{r}
+library(mclust)    # for ARI
+library(aricode)   # for NMI
+
+# --- Extract cluster labels safely from district ---
+hc_labels  <- district$cluster_hc
+km_labels  <- district$cluster_km
+fcm_labels <- district$cluster_fcm
+
+# ---------- ARI (Adjusted Rand Index) ----------
+ARI(hc_labels, km_labels)
+ARI(hc_labels, fcm_labels)
+ARI(km_labels, fcm_labels)
+
+# ---------- NMI (Normalized Mutual Information) ----------
+NMI(hc_labels, km_labels)
+NMI(hc_labels, fcm_labels)
+NMI(km_labels, fcm_labels)
+```
+
+# ============================================================
+# L-moments
+# ============================================================
+
+```{r}
+# ============================================================
+# L-MOMENT COMPUTATION FOR WASH INDICATORS (SINGLE CHUNK)
+# ============================================================
+
+# -------- 1. L-moment function (manual, transparent) --------
+lmoments <- function(x) {
+  
+  x <- sort(x[is.finite(x)])
+  n <- length(x)
+  if (n < 4) stop("At least 4 observations required")
+  
+  # Probability Weighted Moments
+  pwm <- function(r) {
+    k <- (r + 1):n
+    w <- choose(k - 1, r) / choose(n - 1, r)
+    mean(w * x[k])
+  }
+  
+  b0 <- pwm(0)
+  b1 <- pwm(1)
+  b2 <- pwm(2)
+  b3 <- pwm(3)
+  
+  # L-moments
+  L1 <- b0
+  L2 <- 2*b1 - b0
+  L3 <- 6*b2 - 6*b1 + b0
+  L4 <- 20*b3 - 30*b2 + 12*b1 - b0
+  
+  # L-moment ratios
+  tau2 <- L2 / L1
+  tau3 <- L3 / L2
+  tau4 <- L4 / L2
+  
+  data.frame(
+    L1 = L1,
+    L2 = L2,
+    L3 = L3,
+    L4 = L4,
+    Tau2 = tau2,
+    Tau3 = tau3,
+    Tau4 = tau4
+  )
+}
+
+# -------- 2. Indicators used in clustering --------
+wash_vars <- c(
+  "improved_water_pct",
+  "improved_san_pct",
+  "handwashing_basic_pct",
+  "clean_floor_pct",
+  "clean_wall_pct",
+  "private_wash_pct",
+  "child_diarrhea_pct",
+  "crowding_mean"
+)
+
+# -------- 3. Compute L-moments across districts --------
+lmoment_table <- do.call(
+  rbind,
+  lapply(wash_vars, function(v) {
+    cbind(
+      Indicator = v,
+      lmoments(district[[v]])
+    )
+  })
+)
+
+# -------- 4. Display table in report --------
+knitr::kable(
+  lmoment_table,
+  format = "latex",
+  booktabs = TRUE,
+  digits = 3,
+  caption = "L-moment summary of district-level WASH indicators"
+)
+
+
+```
+
+
+
+
+# ============================================================
+#  31.FINAL FIXED CLUSTER-WISE WASH BOXPLOTS (ALL 3 METHODS)
+#  ONLY REAL INDICATORS - PROPER CLUSTER COMPARISON
+# ============================================================
+
+```{r}
+
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# ------------------------------------------------------------
+#  1) SELECT ONLY TRUE WASH INDICATORS + CLUSTERS
+# ------------------------------------------------------------
+wash_box_df <- district %>%
+  select(
+    improved_water_pct,
+    improved_san_pct,
+    handwashing_basic_pct,
+    clean_floor_pct,
+    clean_wall_pct,
+    private_wash_pct,
+    child_diarrhea_pct,
+    crowding_mean,
+    cluster_km,
+    cluster_hc,
+    cluster_fcm
+  ) %>%
+  mutate(
+    cluster_km  = factor(cluster_km),
+    cluster_hc  = factor(cluster_hc),
+    cluster_fcm = factor(cluster_fcm)
+  )
+
+# ------------------------------------------------------------
+#  2) LONG FORMAT FOR EACH METHOD (CLEAN)
+# ------------------------------------------------------------
+
+wash_long_km <- wash_box_df %>%
+  select(cluster_km,
+         improved_water_pct, improved_san_pct, handwashing_basic_pct,
+         clean_floor_pct, clean_wall_pct,
+         private_wash_pct, child_diarrhea_pct, crowding_mean) %>%
+  rename(Cluster = cluster_km) %>%
+  pivot_longer(
+    cols = -Cluster,
+    names_to = "Indicator",
+    values_to = "Value"
+  )
+
+wash_long_hc <- wash_box_df %>%
+  select(cluster_hc,
+         improved_water_pct, improved_san_pct, handwashing_basic_pct,
+         clean_floor_pct, clean_wall_pct,
+         private_wash_pct, child_diarrhea_pct, crowding_mean) %>%
+  rename(Cluster = cluster_hc) %>%
+  pivot_longer(
+    cols = -Cluster,
+    names_to = "Indicator",
+    values_to = "Value"
+  )
+
+wash_long_fcm <- wash_box_df %>%
+  select(cluster_fcm,
+         improved_water_pct, improved_san_pct, handwashing_basic_pct,
+         clean_floor_pct, clean_wall_pct,
+         private_wash_pct, child_diarrhea_pct, crowding_mean) %>%
+  rename(Cluster = cluster_fcm) %>%
+  pivot_longer(
+    cols = -Cluster,
+    names_to = "Indicator",
+    values_to = "Value"
+  )
+
+# ------------------------------------------------------------
+#  3) COLOR PALETTES
+# ------------------------------------------------------------
+pal_km  <- c("1" = "#6A00FF", "2" = "#00BFC4")
+pal_hc  <- c("1" = "#FC4E07", "2" = "#00AFBB")
+pal_fcm <- c("1" = "#C77CFF", "2" = "#00BA38")
+
+# ------------------------------------------------------------
+#  4) K-MEANS BOXPLOTS
+# ------------------------------------------------------------
+p_km <- ggplot(wash_long_km, aes(x = Cluster, y = Value, fill = Cluster)) +
+  geom_boxplot(alpha = 0.85, outlier.size = 1.2, color = "black") +
+  facet_wrap(~ Indicator, scales = "free_y", ncol = 3) +
+  scale_fill_manual(values = pal_km) +
+  labs(
+    title = "Cluster-wise Distribution of WASH Indicators (K-means)",
+    x = "Cluster",
+    y = "Value"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+print(p_km)
+
+ggsave("Figure_Boxplots_KMEANS_CORRECT.png", p_km,
+       width = 12, height = 7, dpi = 600)
+
+# ------------------------------------------------------------
+#  5) HIERARCHICAL BOXPLOTS
+# ------------------------------------------------------------
+p_hc <- ggplot(wash_long_hc, aes(x = Cluster, y = Value, fill = Cluster)) +
+  geom_boxplot(alpha = 0.85, outlier.size = 1.2, color = "black") +
+  facet_wrap(~ Indicator, scales = "free_y", ncol = 3) +
+  scale_fill_manual(values = pal_hc) +
+  labs(
+    title = "Cluster-wise Distribution of WASH Indicators (Hierarchical)",
+    x = "Cluster",
+    y = "Value"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+print(p_hc)
+
+ggsave("Figure_Boxplots_HIERARCHICAL_CORRECT.pdf", p_hc,
+       width = 12, height = 7, dpi = 600)
+
+# ------------------------------------------------------------
+#  6) FUZZY C-MEANS BOXPLOTS 
+# ------------------------------------------------------------
+p_fcm <- ggplot(wash_long_fcm, aes(x = Cluster, y = Value, fill = Cluster)) +
+  geom_boxplot(alpha = 0.85, outlier.size = 1.2, color = "black") +
+  facet_wrap(~ Indicator, scales = "free_y", ncol = 3) +
+  scale_fill_manual(values = pal_fcm) +
+  labs(
+    title = "Cluster-wise Distribution of WASH Indicators (Fuzzy C-means)",
+    x = "Cluster",
+    y = "Value"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+print(p_fcm)
+
+ggsave("Figure_Boxplots_FUZZY_CORRECT.png", p_fcm,
+       width = 12, height = 7, dpi = 600)
+
+```
+
+
+## 32. Cluster-wise Distribution of WASH Indicators (K-means) — FULLY SELF-CONTAINED
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# -----------------------------------------
+#  1) RUN K-MEANS AGAIN SAFELY (k = 2)
+# -----------------------------------------
+set.seed(42)
+kmeans_result <- kmeans(wash_scaled, centers = best_k, nstart = 25)
+
+#  Create cluster vector explicitly
+cluster_km <- kmeans_result$cluster
+
+# -----------------------------------------
+#  2) REBUILD WASH DATA FROM wash_mat
+# -----------------------------------------
+wash_box_df <- as.data.frame(wash_mat)
+
+# -----------------------------------------
+#  3) ATTACH CLUSTERS TO RAW WASH DATA
+# -----------------------------------------
+wash_box_df$Kmeans_Cluster <- factor(cluster_km)
+
+# -----------------------------------------
+#  4) CONVERT TO LONG FORMAT
+# -----------------------------------------
+wash_box_long <- wash_box_df %>%
+  select(
+    Kmeans_Cluster,
+    improved_water_pct,
+    improved_san_pct,
+    handwashing_basic_pct,
+    clean_floor_pct,
+    clean_wall_pct
+  ) %>%
+  pivot_longer(
+    cols = -Kmeans_Cluster,
+    names_to = "Indicator",
+    values_to = "Value"
+  )
+
+# -----------------------------------------
+#  5) FINAL CLUSTER-WISE BOXPLOT
+# -----------------------------------------
+p_box_wash <- ggplot(
+  wash_box_long,
+  aes(x = Kmeans_Cluster, y = Value, fill = Kmeans_Cluster)
+) +
+  geom_boxplot(outlier.size = 1.2, alpha = 0.8) +
+  facet_wrap(~ Indicator, scales = "free_y", ncol = 3) +
+  labs(
+    title = "Cluster-wise Distribution of WASH Indicators (K-means)",
+    x = "Cluster",
+    y = "Indicator Value"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+print(p_box_wash)
+
+# -----------------------------------------
+#  6) SAVE HIGH-RESOLUTION FIGURE
+# -----------------------------------------
+ggsave(
+  "Figure_ClusterWise_WASH_Boxplots_Kmeans.png",
+  plot = p_box_wash,
+  width = 12,
+  height = 7,
+  dpi = 600
+)
+
+```
+
+## 33. Cluster-wise Distribution of WASH Indicators (Fuzzy C-means)
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(e1071)
+
+# -----------------------------------------
+#  1) RUN FUZZY C-MEANS AGAIN SAFELY (k = 2)
+# -----------------------------------------
+set.seed(42)
+fcm_result <- cmeans(wash_scaled, centers = best_k, m = 2)
+
+#  Extract crisp cluster labels from fuzzy membership
+cluster_fcm <- apply(fcm_result$membership, 1, which.max)
+
+# -----------------------------------------
+#  2) REBUILD WASH DATA FROM wash_mat
+# -----------------------------------------
+wash_box_df <- as.data.frame(wash_mat)
+
+# -----------------------------------------
+#  3) ATTACH FUZZY CLUSTERS TO RAW WASH DATA
+# -----------------------------------------
+wash_box_df$Fuzzy_Cluster <- factor(cluster_fcm)
+
+# -----------------------------------------
+#  4) CONVERT TO LONG FORMAT
+# -----------------------------------------
+wash_box_long <- wash_box_df %>%
+  select(
+    Fuzzy_Cluster,
+    improved_water_pct,
+    improved_san_pct,
+    handwashing_basic_pct,
+    clean_floor_pct,
+    clean_wall_pct
+  ) %>%
+  pivot_longer(
+    cols = -Fuzzy_Cluster,
+    names_to = "Indicator",
+    values_to = "Value"
+  )
+
+# -----------------------------------------
+#  5) FINAL CLUSTER-WISE BOXPLOT (FUZZY)
+# -----------------------------------------
+p_box_fuzzy <- ggplot(
+  wash_box_long,
+  aes(x = Fuzzy_Cluster, y = Value, fill = Fuzzy_Cluster)
+) +
+  geom_boxplot(outlier.size = 1.2, alpha = 0.8) +
+  facet_wrap(~ Indicator, scales = "free_y", ncol = 3) +
+  labs(
+    title = "Cluster-wise Distribution of WASH Indicators (Fuzzy C-means)",
+    x = "Cluster",
+    y = "Indicator Value"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+print(p_box_fuzzy)
+
+# -----------------------------------------
+#  6) SAVE HIGH-RESOLUTION FIGURE
+# -----------------------------------------
+ggsave(
+  "Figure_ClusterWise_WASH_Boxplots_Fuzzy.png",
+  plot = p_box_fuzzy,
+  width = 12,
+  height = 7,
+  dpi = 600
+)
+```
+
+
+
+
+#----------------------------#
+# 34. SAVE OUTPUT
+#----------------------------#
+
+```{r}
+write.csv(district, "district_wash_vulnerability_full.csv", row.names = FALSE)
+```
+
+#==================================
+# PLOT 1 — Hierarchical Clustering Dendrogram (Ward’s Method)
+#==================================
+
+```{r}
+plot(hc,
+     main = "Hierarchical Clustering Dendrogram (Ward.D2)",
+     xlab = "District",
+     sub = "",
+     cex = 0.7)
+rect.hclust(hc, k = best_k, border = "red")
+```
+
+==============================
+Plots: Essentials
+==============================
+
+
+# 35 PLOT — NbClust Majority Rule Plot
+
+```{r}
+barplot(table(nb$Best.nc[1,]),
+        xlab = "Number of Clusters",
+        ylab = "Number of Criteria Supporting",
+        main = "NbClust Majority Vote for Optimal k")
+
+```
+
+#36. PLOT 3 — K-means Cluster Visualization (fviz_cluster)
+
+```{r}
+fviz_cluster(
+  km, 
+  data = wash_scaled,
+  geom = "point",
+  ellipse.type = "norm",
+  repel = TRUE,
+  main = "K-means Clustering of WASH Indicators"
+) +
+  theme_minimal()
+
+```
+
+
+#37. PLOT 4 — Fuzzy Membership Heatmap
+
+```{r}
+library(pheatmap)
+library(viridis)
+
+# Add district names as row labels
+rownames(U) <- district$district_name
+
+# Rename fuzzy cluster columns
+colnames(U) <- paste0("Cluster_", 1:ncol(U))
+
+# Sort districts by dominant fuzzy membership
+order_rows <- order(apply(U, 1, which.max))
+
+pheatmap(
+  U[order_rows, ], 
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  color = viridis::inferno(200),
+  main = "Fuzzy C-Means Membership Heatmap",
+  fontsize_row = 7,
+  fontsize_col = 12,
+  angle_col = 45,
+  border_color = NA,
+  cellwidth = 40,
+  cellheight = 10,
+  scale = "none",
+  legend = TRUE
+)
+
+```
+
+
+# ==========================================
+# 38. Urban–Rural FCM Membership Heatmaps
+# ==========================================
+
+```{r}
+
+library(pheatmap)
+
+# Ensure wash_vars exist in each dataset
+wash_vars_urban <- intersect(wash_vars, colnames(urban_df))
+wash_vars_rural <- intersect(wash_vars, colnames(rural_df))
+
+
+urban_scaled <- scale(urban_df[, wash_vars_urban, drop = FALSE])
+rural_scaled <- scale(rural_df[, wash_vars_rural, drop = FALSE])
+
+# Order rows by cluster
+urban_order <- order(urban_df$cluster_fcm_urban)
+rural_order <- order(rural_df$cluster_fcm_rural)
+
+# -------------------------------
+# Urban Heatmap
+# -------------------------------
+pheatmap(
+  urban_scaled[urban_order, ],
+  cluster_rows = FALSE,
+  cluster_cols = TRUE,
+  main = "Urban WASH Vulnerability Heatmap",
+  fontsize_row = 6,
+  color = viridis::viridis(200),
+  border_color = NA
+)
+
+# -------------------------------
+# Rural Heatmap
+# -------------------------------
+pheatmap(
+  rural_scaled[rural_order, ],
+  cluster_rows = FALSE,
+  cluster_cols = TRUE,
+  main = "Rural WASH Vulnerability Heatmap",
+  fontsize_row = 6,
+  color = viridis::viridis(200),
+  border_color = NA
+)
+
+```
+
+
+
+
+# 39. PLOT 5 — Fuzzy Membership Barplot (Alternative)
+
+```{r}
+# Select top 10 most uncertain districts
+top_uncertain <- order(district$max_membership)[1:10]
+
+barplot(
+  t(U[top_uncertain, ]),
+  col = rainbow(best_k),
+  beside = TRUE,
+  main = "Fuzzy Membership (Top 10 Transition Districts)",
+  xlab = "Districts",
+  ylab = "Membership"
+)
+
+legend("topright",
+       legend = paste("Cluster", 1:best_k),
+       fill = rainbow(best_k),
+       cex = 0.8)
+
+```
+
+
+
+# ============================================================
+# FINAL RADAR PLOTS FOR K-MEANS & FCM 
+# ============================================================
+
+
+```{r}
+# =====================================================================
+# ONE-CHUNK CODE: CLUSTER PROFILE BAR PLOTS FOR K-MEANS & FCM
+# =====================================================================
+
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+# ---------------------------------------------------------
+# 1. Reverse & scale crowding ONLY (diarrhea stays raw)
+# ---------------------------------------------------------
+district_fixed <- district %>%
+  mutate(
+    crowding_rev = max(crowding_mean, na.rm = TRUE) - crowding_mean,
+    crowding_mean_rev = rescale(crowding_rev, to = c(0, 100))  # 0–100 scale
+  )
+
+# ---------------------------------------------------------
+# 2. Indicator list (TRUE values)
+# ---------------------------------------------------------
+wash_vars <- c(
+  "improved_water_pct",
+  "improved_san_pct",
+  "handwashing_basic_pct",
+  "clean_floor_pct",
+  "clean_wall_pct",
+  "private_wash_pct",
+  "child_diarrhea_pct",   # RAW VALUES
+  "crowding_mean_rev"     # reversed + scaled
+)
+
+# Pretty names for plotting
+pretty_names <- c(
+  "Improved Water",
+  "Improved Sanitation",
+  "Handwashing Basic",
+  "Clean Floor",
+  "Clean Wall",
+  "Private Wash",
+  "Child Diarrhea (%)",
+  "Crowding (Reversed %)"
+)
+
+# ---------------------------------------------------------
+# 3. Compute cluster means (KM + FCM)
+# ---------------------------------------------------------
+km_means <- district_fixed %>%
+  group_by(cluster_km) %>%
+  summarise(across(all_of(wash_vars), mean, na.rm = TRUE)) %>%
+  mutate(method = "K-means")
+
+fcm_means <- district_fixed %>%
+  group_by(cluster_fcm) %>%
+  summarise(across(all_of(wash_vars), mean, na.rm = TRUE)) %>%
+  mutate(method = "FCM")
+
+# ---------------------------------------------------------
+# 4. Reshape to long format for ggplot
+# ---------------------------------------------------------
+km_long <- km_means %>%
+  rename(cluster = cluster_km) %>%
+  pivot_longer(cols = all_of(wash_vars),
+               names_to = "indicator",
+               values_to = "value")
+
+fcm_long <- fcm_means %>%
+  rename(cluster = cluster_fcm) %>%
+  pivot_longer(cols = all_of(wash_vars),
+               names_to = "indicator",
+               values_to = "value")
+
+all_long <- bind_rows(km_long, fcm_long)
+
+# Replace indicator names with pretty labels
+all_long$indicator <- factor(all_long$indicator,
+                             levels = wash_vars,
+                             labels = pretty_names)
+
+# ---------------------------------------------------------
+# 5. Plot 1: K-MEANS CLUSTER PROFILE BAR PLOT
+# ---------------------------------------------------------
+ggplot(all_long %>% filter(method == "K-means"),
+       aes(x = indicator, y = value, fill = factor(cluster))) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  scale_fill_manual(values = c("red", "blue"),
+                    labels = c("Cluster 1 (Secure)", "Cluster 2 (Vulnerable)")) +
+  labs(title = "K-means Cluster Profiles Across WASH Indicators",
+       x = "Indicator",
+       y = "Mean Value (%)",
+       fill = "Cluster") +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+# ---------------------------------------------------------
+# 6. Plot 2: FCM CLUSTER PROFILE BAR PLOT
+# ---------------------------------------------------------
+ggplot(all_long %>% filter(method == "FCM"),
+       aes(x = indicator, y = value, fill = factor(cluster))) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  scale_fill_manual(values = c("orange", "darkgreen"),
+                    labels = c("Cluster 1 (Vulnerable)", "Cluster 2 (Secure)")) +
+  labs(title = "Fuzzy C-Means Cluster Profiles Across WASH Indicators",
+       x = "Indicator",
+       y = "Mean Value (%)",
+       fill = "Cluster") +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+
+```
+
+
+
+
+
+
+
+# 41. PLOT 7 — Boxplots for Each Indicator by Cluster
+
+```{r}
+library(ggplot2)
+
+# List of indicators and pretty labels
+vars <- c(
+  "improved_water_pct",
+  "improved_san_pct",
+  "handwashing_basic_pct",
+  "clean_floor_pct",
+  "clean_wall_pct",
+  "crowding_mean",
+  "private_wash_pct",
+  "child_diarrhea_pct"
+)
+
+labels <- c(
+  "Improved Water (%)",
+  "Improved Sanitation (%)",
+  "Basic Handwashing (%)",
+  "Clean Floor (%)",
+  "Clean Wall (%)",
+  "Crowding (Persons per Room)",
+  "Private Wash Place (%)",
+  "Child Diarrhoea (%)"
+)
+
+# Loop and plot each indicator
+for (i in seq_along(vars)) {
+  
+  p <- ggplot(district, aes_string(x = "cluster_km", y = vars[i], fill = "cluster_km")) +
+    geom_boxplot(outlier.color = "red", alpha = 0.7) +
+    theme_minimal(base_size = 14) +
+    labs(
+      title = paste("Distribution of", labels[i], "by Cluster"),
+      x = "Cluster",
+      y = labels[i],
+      fill = "Cluster"
+    ) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      legend.position = "none"
+    )
+  
+  print(p)
+}
+```
+
+# ============================================================
+# 42. URBAN–RURAL DIAGNOSTIC PLOTS (K-MEANS PCA + WARD.D2 TREES)
+# ============================================================
+
+```{r}
+# ============================================================
+# URBAN and RURAL: K-MEANS PCA PLOTS + WARD.D2 DENDROGRAMS
+# ============================================================
+
+library(factoextra)
+library(cluster)
+library(ggrepel)
+
+# 0. Make sure rownames of matrices are district names
+rownames(urban_mat) <- urban_df$district_name
+rownames(rural_mat) <- rural_df$district_name
+
+# ------------------------------------------------------------
+# 3) URBAN WARD.D2 DENDROGRAM (district-name labels)
+# ------------------------------------------------------------
+# give the hclust object proper labels
+hc_urban$labels <- urban_df$district_name
+
+p_hc_urban <- fviz_dend(
+  hc_urban,
+  k        = best_k,
+  rect     = TRUE,
+  k_colors = c("#2ca25f", "#de2d26"),
+  show_labels = TRUE,
+  main     = "Urban WASH Vulnerability (Ward.D2 Dendrogram)",
+  ggtheme  = theme_minimal(base_size = 14),
+  cex      = 0.6
+)
+
+print(p_hc_urban)
+
+ggsave("URBAN_WARD_D2_DENDROGRAM.png",
+       plot   = p_hc_urban,
+       width  = 10, height = 6, dpi = 600)
+
+
+# ------------------------------------------------------------
+# 4) RURAL WARD.D2 DENDROGRAM (district-name labels)
+# ------------------------------------------------------------
+hc_rural$labels <- rural_df$district_name
+
+p_hc_rural <- fviz_dend(
+  hc_rural,
+  k        = best_k,
+  rect     = TRUE,
+  ellipse.type = "norm",
+  k_colors = c("#2ca25f", "#de2d26"),
+  show_labels = TRUE,
+  main     = "Rural WASH Vulnerability (Ward.D2 Dendrogram)",
+  ggtheme  = theme_minimal(base_size = 14),
+  cex      = 0.6
+)
+
+print(p_hc_rural)
+
+ggsave("RURAL_WARD_D2_DENDROGRAM.png",
+       plot   = p_hc_rural,
+       width  = 10, height = 6, dpi = 600)
+
+```
+
+# ============================================================
+# 43. URBAN–RURAL DIAGNOSTIC PLOTS (K-MEANS PCA)
+# ============================================================
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+
+# ---------- FUNCTION TO DRAW CLUSTER HULL ----------
+cluster_hull <- function(data, cluster_col = "cluster") {
+  data %>%
+    group_by(!!sym(cluster_col)) %>%
+    slice(chull(PC1, PC2))   # convex hull
+}
+
+# ------------------------------------------------------------
+# 1) URBAN PCA WITH HULLS + LABELS
+# ------------------------------------------------------------
+pca_urban <- prcomp(urban_mat, scale. = FALSE)
+
+scores_urban <- as.data.frame(pca_urban$x[, 1:2])
+colnames(scores_urban) <- c("PC1", "PC2")
+
+scores_urban$district_name <- urban_df$district_name
+scores_urban$cluster <- factor(
+  urban_df$cluster_km_urban,
+  levels = c(1, 2),
+  labels = c("Cluster 1", "Cluster 2")
+)
+
+# Compute hull points
+hulls_urban <- cluster_hull(scores_urban)
+
+p_km_urban_pca <- ggplot(scores_urban, aes(PC1, PC2, colour = cluster)) +
+  geom_polygon(data = hulls_urban,
+               aes(fill = cluster),
+               alpha = 0.25,
+               colour = NA) +
+  geom_point(size = 3, shape = 21, fill = "white", stroke = 1) +
+  geom_text_repel(aes(label = district_name),
+                  size = 3.4,
+                  fontface = "bold",
+                  max.overlaps = 80) +
+  scale_colour_manual(values = c("Cluster 1" = "#de2d26",
+                                 "Cluster 2" = "#2ca25f")) +
+  scale_fill_manual(values = c("Cluster 1" = "#de2d26",
+                               "Cluster 2" = "#2ca25f")) +
+  labs(
+    title = "Urban WASH Clusters (K-means PCA Projection)",
+    x = paste0("PC1 (", round(summary(pca_urban)$importance[2,1]*100, 1), "%)"),
+    y = paste0("PC2 (", round(summary(pca_urban)$importance[2,2]*100, 1), "%)"),
+    colour = "Urban Cluster",
+    fill = "Urban Cluster"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1)
+  )
+
+print(p_km_urban_pca)
+
+ggsave("URBAN_KMEANS_PCA.png",
+       plot = p_km_urban_pca,
+       width = 8, height = 6, dpi = 600)
+
+
+# ------------------------------------------------------------
+# 2) RURAL PCA WITH HULLS + LABELS
+# ------------------------------------------------------------
+pca_rural <- prcomp(rural_mat, scale. = FALSE)
+
+scores_rural <- as.data.frame(pca_rural$x[, 1:2])
+colnames(scores_rural) <- c("PC1", "PC2")
+
+scores_rural$district_name <- rural_df$district_name
+scores_rural$cluster <- factor(
+  rural_df$cluster_km_rural,
+  levels = c(1, 2),
+  labels = c("Cluster 1", "Cluster 2")
+)
+
+hulls_rural <- cluster_hull(scores_rural)
+
+p_km_rural_pca <- ggplot(scores_rural, aes(PC1, PC2, colour = cluster)) +
+  geom_polygon(data = hulls_rural,
+               aes(fill = cluster),
+               alpha = 0.25,
+               colour = NA) +
+  geom_point(size = 3, shape = 21, fill = "white", stroke = 1) +
+  geom_text_repel(aes(label = district_name),
+                  size = 3.4,
+                  fontface = "bold",
+                  max.overlaps = 80) +
+  scale_colour_manual(values = c("Cluster 1" = "#de2d26",
+                                 "Cluster 2" = "#2ca25f")) +
+  scale_fill_manual(values = c("Cluster 1" = "#de2d26",
+                               "Cluster 2" = "#2ca25f")) +
+  labs(
+    title = "Rural WASH Clusters (K-means PCA Projection)",
+    x = paste0("PC1 (", round(summary(pca_rural)$importance[2,1]*100, 1), "%)"),
+    y = paste0("PC2 (", round(summary(pca_rural)$importance[2,2]*100, 1), "%)"),
+    colour = "Rural Cluster",
+    fill = "Rural Cluster"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1)
+  )
+
+print(p_km_rural_pca)
+
+ggsave("RURAL_KMEANS_PCA.png",
+       plot = p_km_rural_pca,
+       width = 8, height = 6, dpi = 600)
+
+```
+
+
+## 44. EXtra
+
+```{r}
+
+library(dplyr)
+
+# Re-attach K-means cluster to district
+district$cluster_km <- km$cluster
+
+# Verify cluster sizes
+table(district$cluster_km)
+
+# Get district names by cluster
+district_by_cluster <- split(district$district_name, district$cluster_km)
+district_by_cluster
+
+# Create thesis-ready table
+district_cluster_table <- district %>%
+  select(district_code, district_name, cluster_km) %>%
+  arrange(cluster_km)
+
+district_cluster_table
+table(district$cluster_km)
+
+# Save for thesis / supervisor
+write.csv(district_cluster_table,
+          "district_cluster_membership_final.csv",
+          row.names = FALSE)
+
+```
+
+# =========================================================
+# 45. FINAL: 64 DISTRICTS, NO NA, MANUAL NAME CONTROL (ONE CHUNK)
+# =========================================================
+
+```{r}
+
+# ============================================================
+# FIX: EXCEL COLUMN NAME MISMATCH
+# ============================================================
+
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(readxl)
+
+# -------------------------------
+# 1. Load GADM map
+# -------------------------------
+bd_map <- st_read("gadm41_BGD_2.json", quiet = TRUE) %>%
+  mutate(district_gadm = str_to_lower(str_trim(NAME_2))) %>%
+  select(district_gadm, geometry)
+
+# -------------------------------
+# 2. Read Excel lookup (ROBUST)
+# -------------------------------
+lookup_raw <- read_excel("district_name_lookup.xlsx")
+
+# SEE column names (for safety)
+print(names(lookup_raw))
+
+# Assume first column = GADM name, second column = analysis name
+lookup <- lookup_raw %>%
+  rename(
+    district_gadm = 1,
+    district_analysis = 2
+  ) %>%
+  mutate(
+    district_gadm = str_to_lower(str_trim(district_gadm)),
+    district_analysis = str_to_lower(str_trim(district_analysis))
+  )
+
+# HARD CHECK
+if (any(is.na(lookup$district_analysis))) {
+  stop("Excel lookup still has NA values. Please fill all district names.")
+}
+
+# -------------------------------
+# 3. Prepare WASH vulnerability data
+# -------------------------------
+wash_df <- district %>%
+  mutate(
+    district_analysis = str_to_lower(str_trim(district_name)),
+    gap = abs(U[,1] - U[,2])
+  ) %>%
+  arrange(gap) %>%
+  mutate(
+    Status = dplyr::case_when(
+  transition_flag == 1 ~ "Transitional",
+  cluster_fcm == 1 ~ "Vulnerable",
+  cluster_fcm == 2 ~ "Relatively Secure"
+    )
+  ) %>%
+  select(district_analysis, Status)
+
+# -------------------------------
+# 4. Join everything (NO NA)
+# -------------------------------
+bd_map_final <- bd_map %>%
+  left_join(lookup, by = "district_gadm") %>%
+  left_join(wash_df, by = "district_analysis")
+
+# HARD CHECK
+if (any(is.na(bd_map_final$Status))) {
+  stop(
+    "Unmatched districts:\n",
+    paste(
+      bd_map_final$district_gadm[is.na(bd_map_final$Status)],
+      collapse = ", "
+    )
+  )
+}
+
+# -------------------------------
+# 5. Plot final map
+# -------------------------------
+p_final <- ggplot(bd_map_final) +
+  geom_sf(aes(fill = Status), color = "white", linewidth = 0.2) +
+  scale_fill_manual(
+    values = c(
+      "Relatively Secure" = "#1a9850",
+      "Transitional"      = "#fee08b",
+      "Vulnerable"        = "#d73027"
+    ),
+    name = "WASH Vulnerability Type"
+  ) +
+  labs(
+    title = "District-Level WASH Vulnerability (FCM-clustering)",
+    subtitle = "Transitional districts identified using fuzzy C-means membership ambiguity",
+    caption = "Source: MICS 2019; GADM v4.1; Author’s computation"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    # ---- FIX CROPPING ----
+    plot.margin = margin(
+      t = 20,  # TOP
+      r = 20,  # RIGHT
+      b = 15,  # BOTTOM
+      l = 25   # LEFT (IMPORTANT)
+    ),
+    
+    # ---- CENTER TEXT ----
+    plot.title = element_text(
+      hjust = 0.5,
+      face = "bold",
+      size = 16,
+      margin = margin(b = 8)
+    ),
+    plot.subtitle = element_text(
+      hjust = 0.5,
+      size = 12,
+      margin = margin(b = 10)
+    ),
+    plot.caption = element_text(
+      hjust = 0.5,
+      size = 10,
+      margin = margin(t = 10)
+    ),
+    
+    # ---- CLEAN MAP ----
+    axis.text  = element_blank(),
+    axis.title = element_blank(),
+    panel.grid = element_blank()
+  )
+p_final
+
+
+ggsave(
+  "Figure_Chapter_4_fcm_Map.pdf",
+  plot = p_final,
+  width = 13,
+  height = 20,
+  units = "in"
+)
+
+# ============================================================
+# APPENDIX FIGURE A1: K-MEANS WASH VULNERABILITY MAP
+# ============================================================
+
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(readxl)
+
+# -------------------------------
+# 1. Load GADM map
+# -------------------------------
+bd_map <- st_read("gadm41_BGD_2.json", quiet = TRUE) %>%
+  mutate(district_gadm = str_to_lower(str_trim(NAME_2))) %>%
+  select(district_gadm, geometry)
+
+# -------------------------------
+# 2. Read Excel district lookup
+# -------------------------------
+lookup <- read_excel("district_name_lookup.xlsx") %>%
+  rename(district_gadm = 1, district_analysis = 2) %>%
+  mutate(
+    district_gadm = str_to_lower(str_trim(district_gadm)),
+    district_analysis = str_to_lower(str_trim(district_analysis))
+  )
+
+# -------------------------------
+# 3. Prepare K-means results
+# -------------------------------
+km_df <- district %>%
+  mutate(
+    district_analysis = str_to_lower(str_trim(district_name)),
+    Status = ifelse(cluster_km == 1, "Relatively Secure", "Vulnerable")
+  ) %>%
+  select(district_analysis, Status)
+
+# -------------------------------
+# 4. Join and check
+# -------------------------------
+bd_map_km <- bd_map %>%
+  left_join(lookup, by = "district_gadm") %>%
+  left_join(km_df, by = "district_analysis")
+
+stopifnot(!any(is.na(bd_map_km$Status)))
+
+# -------------------------------
+# 5. Plot K-means map
+# -------------------------------
+p_km <- ggplot(bd_map_km) +
+  geom_sf(aes(fill = Status), color = "white", linewidth = 0.2) +
+  scale_fill_manual(
+    values = c(
+      "Relatively Secure" = "#1a9850",
+      "Vulnerable" = "#d73027"
+    ),
+    name = "WASH Vulnerability Type"
+  ) +
+  labs(
+    title = "District-Level WASH Vulnerability (K-Means Clustering)",
+    caption = "Source: MICS 2019; GADM v4.1; Author’s computation"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+print(p_km)
+
+ggsave(
+  "Figure_Chapter_4_K_means_map.pdf",
+  plot = p_km,
+  width = 8,
+  height = 9,
+  units = "in"
+)
+
+
+
+# ============================================================
+# APPENDIX FIGURE A2: HIERARCHICAL CLUSTERING WASH MAP
+# ============================================================
+
+# -------------------------------
+# 1. Prepare Hierarchical results
+# -------------------------------
+hc_df <- district %>%
+  mutate(
+    district_analysis = str_to_lower(str_trim(district_name)),
+    Status = ifelse(cluster_hc == 1, "Vulnerable", "Relatively Secure")
+  ) %>%
+  select(district_analysis, Status)
+
+# -------------------------------
+# 2. Join and check
+# -------------------------------
+bd_map_hc <- bd_map %>%
+  left_join(lookup, by = "district_gadm") %>%
+  left_join(hc_df, by = "district_analysis")
+
+stopifnot(!any(is.na(bd_map_hc$Status)))
+
+# -------------------------------
+# 3. Plot Hierarchical map
+# -------------------------------
+p_hc <- ggplot(bd_map_hc) +
+  geom_sf(aes(fill = Status), color = "white", linewidth = 0.2) +
+  scale_fill_manual(
+    values = c(
+      "Relatively Secure" = "#1a9850",
+      "Vulnerable" = "#d73027"
+    ),
+    name = "WASH Vulnerability Type"
+  ) +
+  labs(
+    title = "District-Level WASH Vulnerability (Hierarchical Clustering)",
+    caption = "Source: MICS 2019; GADM v4.1; Author’s computation"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+print(p_hc)
+
+# Save
+ggsave(
+  "Figure_Chapter_4_Hierarchical_WASH_Map.pdf",
+  plot = p_hc,
+  width = 8,
+  height = 9,
+  units = "in"
+)
+
+
+
+
+
+```
+
+
+
+
+\clearpage
+
+# 46.
+# ================================================================
+# APPENDIX TABLE A1 — MATCHING RAINFALL PAPER FORMAT (ONE A4 PAGE)
+# ================================================================
+
+```{r}
+library(kableExtra)
+library(knitr)
+library(dplyr)
+
+# 1. Extract fuzzy membership and convert to %
+U_mat <- as.data.frame(fcm$membership)
+U_pct <- round(U_mat * 100, 1)
+
+# 2. Add district names
+U_pct$District <- district$district_name
+
+# 3. Reorder and rename
+U_pct <- U_pct %>% select(District, everything())
+colnames(U_pct) <- c("District", "Cluster 1 (%)", "Cluster 2 (%)")
+
+# 4. Sort by dominant cluster
+U_pct$Dominant <- apply(U_pct[, -1], 1, which.max)
+U_pct <- U_pct %>% arrange(Dominant) %>% select(-Dominant)
+
+# 5. Split into TWO EQUAL HALVES
+n <- nrow(U_pct)
+half <- ceiling(n / 2)
+
+left_tbl  <- U_pct[1:half, ]
+right_tbl <- U_pct[(half + 1):n, ]
+
+# 6. Combine side-by-side (half–half)
+two_col_tbl <- cbind(left_tbl, right_tbl)
+
+# 7. Final rainfall-style A4 table
+kable(
+  two_col_tbl,
+  format = "latex",
+  booktabs = TRUE,
+  align = "lcc|lcc",
+  caption = "Table A1. The membership degrees (in percentage) of the districts by FCM for the WASH vulnerability clusters."
+) %>%
+  add_header_above(
+    c(" " = 1, "WASH Vulnerability (FCM)" = 2, " " = 1, "WASH Vulnerability (FCM)" = 2),
+    bold = TRUE,
+    line = TRUE
+  ) %>%
+  kable_styling(
+    latex_options = c("scale_down", "striped"),
+    font_size = 7
+  )
+```
+
+# ================================================================
+# APPENDIX TABLE A2 — URBAN FCM (RAIN PAPER STYLE, ONE A4 PAGE)
+# ================================================================
+
+```{r}
+library(kableExtra)
+library(knitr)
+library(dplyr)
+
+# 1. Extract Urban FCM membership & convert to %
+U_urban <- as.data.frame(fcm_urban$membership)
+U_urban_pct <- round(U_urban * 100, 1)
+
+# 2. Add district names
+U_urban_pct$District <- urban_df$district_name
+
+# 3. Reorder and rename
+U_urban_pct <- U_urban_pct %>% select(District, everything())
+colnames(U_urban_pct) <- c("District", "Cluster 1 (%)", "Cluster 2 (%)")
+
+# 4. Sort by dominant cluster
+U_urban_pct$Dominant <- apply(U_urban_pct[, -1], 1, which.max)
+U_urban_pct <- U_urban_pct %>% arrange(Dominant) %>% select(-Dominant)
+
+# 5. Split into TWO EQUAL HALVES
+n <- nrow(U_urban_pct)
+half <- ceiling(n / 2)
+
+left_tbl  <- U_urban_pct[1:half, ]
+right_tbl <- U_urban_pct[(half + 1):n, ]
+
+# 6. Combine side-by-side (half–half)
+two_col_tbl <- cbind(left_tbl, right_tbl)
+
+# 7. Final rainfall-style A4 table (URBAN)
+kable(
+  two_col_tbl,
+  format = "latex",
+  booktabs = TRUE,
+  align = "lcc|lcc",
+  caption = "Table A1. Urban membership degrees (in percentage) of districts by FCM for WASH vulnerability clusters."
+) %>%
+  add_header_above(
+    c(" " = 1, "Urban WASH Vulnerability (FCM)" = 2,
+      " " = 1, "Urban WASH Vulnerability (FCM)" = 2),
+    bold = TRUE,
+    line = TRUE
+  ) %>%
+  kable_styling(
+    latex_options = c( "scale_down", "striped"),
+    font_size = 7
+  )
+
+```
+
+# ================================================================
+# APPENDIX TABLE A2 — RURAL FCM (RAIN PAPER STYLE, ONE A4 PAGE)
+# ================================================================
+
+```{r}
+# 1. Extract Rural FCM membership & convert to %
+U_rural <- as.data.frame(fcm_rural$membership)
+U_rural_pct <- round(U_rural * 100, 1)
+
+# 2. Add district names
+U_rural_pct$District <- rural_df$district_name
+
+# 3. Reorder and rename
+U_rural_pct <- U_rural_pct %>% select(District, everything())
+colnames(U_rural_pct) <- c("District", "Cluster 1 (%)", "Cluster 2 (%)")
+
+# 4. Sort by dominant cluster
+U_rural_pct$Dominant <- apply(U_rural_pct[, -1], 1, which.max)
+U_rural_pct <- U_rural_pct %>% arrange(Dominant) %>% select(-Dominant)
+
+# 5. Split into TWO EQUAL HALVES
+n <- nrow(U_rural_pct)
+half <- ceiling(n / 2)
+
+left_tbl  <- U_rural_pct[1:half, ]
+right_tbl <- U_rural_pct[(half + 1):n, ]
+
+# 6. Combine side-by-side (half–half)
+two_col_tbl <- cbind(left_tbl, right_tbl)
+
+# 7. Final rainfall-style A4 table (RURAL)
+kable(
+  two_col_tbl,
+  format = "latex",
+  booktabs = TRUE,
+  align = "lcc|lcc",
+  caption = "Table A2. Rural membership degrees (in percentage) of districts by FCM for WASH vulnerability clusters."
+) %>%
+  add_header_above(
+    c(" " = 1, "Rural WASH Vulnerability (FCM)" = 2,
+      " " = 1, "Rural WASH Vulnerability (FCM)" = 2),
+    bold = TRUE,
+    line = TRUE
+  ) %>%
+  kable_styling(
+    latex_options = c("scale_down", "striped"),
+    font_size = 7
+  )
+
+```
+
+
+==============================
+Appendix
+==============================
+
+```{r}
+# =====================================================================
+# ONE CHUNK: FINAL RADAR PLOTS FOR K-MEANS & FCM (MATCHES EXCEL)
+# =====================================================================
+
+library(dplyr)
+library(fmsb)
+library(scales)
+
+# ---------------------------------------------------------
+# 1. Reverse + scale crowding only (diarrhea stays raw)
+# ---------------------------------------------------------
+district_fixed <- district %>%
+  mutate(
+    crowding_rev = max(crowding_mean, na.rm = TRUE) - crowding_mean,
+    crowding_mean_rev = rescale(crowding_rev, to = c(0, 100))
+  )
+
+# ---------------------------------------------------------
+# 2. Indicator order
+# ---------------------------------------------------------
+wash_vars <- c(
+  "improved_water_pct",
+  "improved_san_pct",
+  "handwashing_basic_pct",
+  "clean_floor_pct",
+  "clean_wall_pct",
+  "private_wash_pct",
+  "child_diarrhea_pct",     # RAW
+  "crowding_mean_rev"       # reversed + scaled
+)
+
+# ---------------------------------------------------------
+# 3. Cluster means
+# ---------------------------------------------------------
+km_means <- district_fixed %>%
+  group_by(cluster_km) %>%
+  summarise(across(all_of(wash_vars), mean, na.rm = TRUE))
+
+fcm_means <- district_fixed %>%
+  group_by(cluster_fcm) %>%
+  summarise(across(all_of(wash_vars), mean, na.rm = TRUE))
+
+# ---------------------------------------------------------
+# 4. Radar scaling (0–100)
+# ---------------------------------------------------------
+max_values <- rep(100, length(wash_vars))
+min_values <- rep(0,   length(wash_vars))
+
+radar_km <- as.data.frame(rbind(max_values, min_values, km_means))
+rownames(radar_km) <- c("Max", "Min", "KM Cluster 1", "KM Cluster 2")
+
+radar_fcm <- as.data.frame(rbind(max_values, min_values, fcm_means))
+rownames(radar_fcm) <- c("Max", "Min", "FCM Cluster 1", "FCM Cluster 2")
+
+# ---------------------------------------------------------
+# 5. Increase margin for legend
+# ---------------------------------------------------------
+par(mar = c(8, 4, 4, 4))
+
+# ---------------------------------------------------------
+# 6. RADAR PLOT — K-MEANS
+# ---------------------------------------------------------
+radarchart(
+  radar_km,
+  axistype = 1,
+  pcol = c("red", "blue"),
+  plwd = 3,
+  plty = c(1, 2),
+  cglcol = "grey80",
+  vlcex = 0.8,
+  title = "K-means Cluster Profile Radar Plot"
+)
+
+legend(
+  "bottom",
+  inset = -0.30,
+  legend = c("KM Cluster 1 (Secure)", "KM Cluster 2 (Vulnerable)"),
+  col = c("red", "blue"),
+  lwd = 3,
+  lty = c(1, 2),
+  cex = 1.1,
+  horiz = TRUE,
+  bty = "n",
+  xpd = TRUE
+)
+
+# ---------------------------------------------------------
+# 7. RADAR PLOT — FCM
+# ---------------------------------------------------------
+radarchart(
+  radar_fcm,
+  axistype = 1,
+  pcol = c("orange", "darkgreen"),
+  plwd = 3,
+  plty = c(1, 2),
+  cglcol = "grey80",
+  vlcex = 0.8,
+  title = "Fuzzy C-Means Cluster Profile Radar Plot"
+)
+
+legend(
+  "bottom",
+  inset = -0.30,
+  legend = c("FCM Cluster 1 (Vulnerable)", "FCM Cluster 2 (Secure)"),
+  col = c("orange", "darkgreen"),
+  lwd = 3,
+  lty = c(1, 2),
+  cex = 1.1,
+  horiz = TRUE,
+  bty = "n",
+  xpd = TRUE
+)
+
+```
+
+
+############################
+Summary
+############################
+
+
+```{r}
+# ============================================================
+# 4.1 DESCRIPTIVE STATISTICS OF DISTRICT-LEVEL WASH INDICATORS
+# ============================================================
+
+library(dplyr)
+library(tidyr)
+library(knitr)
+
+# ---- Select final district-level WASH indicators ----
+wash_vars <- district %>%
+  dplyr::select(
+    improved_water_pct,
+    improved_san_pct,
+    handwashing_basic_pct,
+    clean_floor_pct,
+    clean_wall_pct,
+    private_wash_pct,
+    child_diarrhea_pct,
+    crowding_mean
+  )
+
+# ---- Compute descriptive statistics across districts ----
+desc_table <- wash_vars %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "Indicator",
+    values_to = "Value"
+  ) %>%
+  group_by(Indicator) %>%
+  summarise(
+    Mean = mean(Value, na.rm = TRUE),
+    SD   = sd(Value, na.rm = TRUE),
+    Min  = min(Value, na.rm = TRUE),
+    Max  = max(Value, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# ---- Replace R variable names with thesis-friendly labels ----
+desc_table$Indicator <- recode(
+  desc_table$Indicator,
+  improved_water_pct      = "Access to Improved Drinking Water (%)",
+  improved_san_pct        = "Access to Improved Sanitation Facilities (%)",
+  handwashing_basic_pct   = "Availability of Basic Handwashing Facilities (%)",
+  clean_floor_pct         = "Households with Improved Floor Materials (%)",
+  clean_wall_pct          = "Households with Improved Wall Materials (%)",
+  crowding_mean           = "Household Crowding Index (Persons per Sleeping Room)",
+  private_wash_pct        = "Women’s Access to a Private Place for Menstrual Hygiene (%)",
+  child_diarrhea_pct      = "Prevalence of Childhood Diarrhoea (%)"
+)
+
+# ---- Display thesis-ready table ----
+kable(
+  desc_table,
+  format = "latex",
+  booktabs = TRUE,
+  digits = 2,
+  caption = "Descriptive statistics of district-level WASH vulnerability indicators (n = 64 districts)"
+)
+
+```
+
+
+
+
+```{r}
+# ============================================================
+# SECTION 4.5 : CLUSTER-WISE WASH PROFILE TABLE
+# (Fuzzy C-Means → Hard Assignment → Summary Table)
+# ============================================================
+
+library(e1071)
+library(dplyr)
+library(knitr)
+library(kableExtra)
+
+# ------------------------------------------------------------
+# 1. Ensure scaled data exists (used in FCM)
+# ------------------------------------------------------------
+# wash_scaled : standardized district-level indicators
+# district    : district-level data frame (64 rows)
+
+# ------------------------------------------------------------
+# 2. Fit Fuzzy C-Means model (k = best_k = 2)
+# ------------------------------------------------------------
+set.seed(42)
+fcm_fit <- cmeans(
+  wash_scaled,
+  centers = best_k,
+  m = 2
+)
+
+# ------------------------------------------------------------
+# 3. Extract membership matrix
+# ------------------------------------------------------------
+fcm_membership <- as.matrix(fcm_fit$membership)
+
+# ------------------------------------------------------------
+# 4. Hard (crisp) cluster assignment
+# ------------------------------------------------------------
+district$cluster_fcm_hard <- apply(fcm_membership, 1, which.max)
+
+district$cluster_fcm_hard <- factor(
+  district$cluster_fcm_hard,
+  levels = c(1, 2),
+  labels = c("High WASH Vulnerability", "Relatively Secure WASH")
+)
+
+# ------------------------------------------------------------
+# 5. (Optional but recommended) Membership certainty
+# ------------------------------------------------------------
+district$max_membership <- apply(fcm_membership, 1, max)
+
+# ------------------------------------------------------------
+# 6. Cluster-wise indicator profile (MEANS)
+# ------------------------------------------------------------
+cluster_profile_table <- district %>%
+  group_by(cluster_fcm_hard) %>%
+  summarise(
+    `Improved drinking water (%)` =
+      mean(improved_water_pct, na.rm = TRUE),
+
+    `Improved sanitation (%)` =
+      mean(improved_san_pct, na.rm = TRUE),
+
+    `Basic handwashing facility (%)` =
+      mean(handwashing_basic_pct, na.rm = TRUE),
+
+    `Improved floor (%)` =
+      mean(clean_floor_pct, na.rm = TRUE),
+
+    `Improved wall (%)` =
+      mean(clean_wall_pct, na.rm = TRUE),
+
+    `Household crowding index` =
+      mean(crowding_mean, na.rm = TRUE),
+
+    `Women’s access to private washing space (%)` =
+      mean(private_wash_pct, na.rm = TRUE),
+
+    `Child diarrhoea prevalence (%)` =
+      mean(child_diarrhea_pct, na.rm = TRUE),
+
+    .groups = "drop"
+  )
+
+# ------------------------------------------------------------
+# 7. Display thesis-ready table
+# ------------------------------------------------------------
+kable(
+  cluster_profile_table,
+  digits = 2,
+  caption = "Cluster-wise mean values of district-level WASH vulnerability indicators based on Fuzzy C-means clustering"
+) %>%
+  kable_styling(
+    latex_options = c("hold_position", "striped"),
+    full_width = FALSE
+  )
+
+```
+
+
+
+
+
+```{r}
+# ============================================================
+# IDENTIFICATION OF TRANSITIONAL DISTRICTS (FUZZY C-MEANS)
+# ============================================================
+
+library(dplyr)
+
+# ------------------------------------------------------------
+# 1. Extract FCM membership matrix
+# ------------------------------------------------------------
+U <- as.matrix(fcm_fit$membership)
+
+# ------------------------------------------------------------
+# 2. Attach membership values to district-level data
+# ------------------------------------------------------------
+district <- district %>%
+  mutate(
+    fcm_cluster1 = U[, 1],
+    fcm_cluster2 = U[, 2],
+
+    # Degree of certainty
+    max_membership = pmax(fcm_cluster1, fcm_cluster2),
+
+    # Distance from cluster boundary
+    membership_gap = abs(fcm_cluster1 - fcm_cluster2)
+  )
+
+# ------------------------------------------------------------
+# 3. Define transitional zones numerically
+#    (Standard fuzzy clustering practice)
+# ------------------------------------------------------------
+district <- district %>%
+  mutate(
+    transition_zone = ifelse(
+      max_membership < 0.70,
+      "Transitional district",
+      "Core cluster district"
+    )
+  )
+
+# ------------------------------------------------------------
+# 4. Extract transitional districts (numerical output)
+# ------------------------------------------------------------
+transitional_districts <- district %>%
+  filter(transition_zone == "Transitional district") %>%
+  select(
+    district_name,
+    fcm_cluster1,
+    fcm_cluster2,
+    max_membership,
+    membership_gap
+  ) %>%
+  arrange(max_membership)
+
+# ------------------------------------------------------------
+# 5. View results
+# ------------------------------------------------------------
+transitional_districts
+
+```
+
+
+
+```{r}
+# ============================================================
+#  IDENTIFICATION OF ANALYTICALLY TRANSITIONAL DISTRICTS (FCM)
+# ============================================================
+
+# Assumptions:
+# - fcm_membership: matrix/data.frame of FCM memberships (n_districts × 2)
+# - district_names: vector of district names in the same order
+#   (if not available, rownames(fcm_membership) will be used)
+
+# ------------------------------------------------------------
+# 1. Prepare membership data
+# ------------------------------------------------------------
+
+membership_df <- as.data.frame(fcm_membership)
+colnames(membership_df) <- c("Cluster_1", "Cluster_2")
+
+membership_df$district <- if (!is.null(rownames(membership_df))) {
+  rownames(membership_df)
+} else {
+  district_names
+}
+
+# ------------------------------------------------------------
+# 2. Compute dominance and membership gap
+# ------------------------------------------------------------
+
+membership_df$max_membership <- pmax(
+  membership_df$Cluster_1,
+  membership_df$Cluster_2
+)
+
+membership_df$membership_gap <- abs(
+  membership_df$Cluster_1 - membership_df$Cluster_2
+)
+
+# ------------------------------------------------------------
+# 3. Define analytical transition criterion
+# ------------------------------------------------------------
+
+delta <- 0.05   # conservative threshold (report this in thesis)
+
+membership_df$transition_flag <- membership_df$membership_gap < delta
+
+# ------------------------------------------------------------
+# 4. Extract transitional districts
+# ------------------------------------------------------------
+
+transitional_districts <- membership_df[
+  membership_df$transition_flag,
+  c("district", "Cluster_1", "Cluster_2",
+    "max_membership", "membership_gap")
+]
+
+# ------------------------------------------------------------
+# 5. Summary for reporting
+# ------------------------------------------------------------
+
+list(
+  number_of_transitional_districts = nrow(transitional_districts),
+  min_membership_gap = min(membership_df$membership_gap),
+  summary_membership_gap = summary(membership_df$membership_gap),
+  summary_max_membership = summary(membership_df$max_membership)
+)
+
+# ------------------------------------------------------------
+# 6. View transitional districts (optional)
+# ------------------------------------------------------------
+
+transitional_districts
+
+```
+
+
+
+```{r}
+library(reshape2)
+library(ggplot2)
+
+# Convert membership to percentage
+U_pct <- U * 100
+
+# Prepare long-format data
+heat_df <- melt(U_pct)
+colnames(heat_df) <- c("District", "Cluster", "Membership")
+
+heat_df$District <- district$district_name[heat_df$District]
+heat_df$Cluster <- factor(
+  heat_df$Cluster,
+  labels = c("WASH-Vulnerable", "WASH-Secure")
+)
+
+# Plot heatmap with percentages on tiles
+ggplot(heat_df, aes(x = Cluster, y = District, fill = Membership)) +
+  geom_tile(color = "white") +
+  geom_text(
+    aes(label = paste0(round(Membership, 0), "%")),
+    size = 2.8
+  ) +
+  scale_fill_gradient(
+    low = "#f03b20",
+    high = "#2ca25f",
+    name = "Membership (%)"
+  ) +
+  labs(
+    title = "District-level FCM Membership Percentages",
+    x = "",
+    y = ""
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.y = element_text(size = 7),
+    panel.grid = element_blank()
+  )
+
+```
+
