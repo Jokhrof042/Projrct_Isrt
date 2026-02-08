@@ -1,0 +1,5 @@
+mkdir codex
+touch codex/.gitkeep
+git add codex/.gitkeep
+git commit -m "Add codex folder"
+git push
